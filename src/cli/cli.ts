@@ -82,6 +82,12 @@ export const cli = yargs
 		default: false,
 		type: 'boolean'
 	})
+    .option('default-seperator', {
+		alias: 'df',
+		describe: 'String seperator after which the value will be used as a default translation (Off by default)',
+		default: null,
+		type: 'string'
+	})
     .exitProcess(true)
     .parse(process.argv);
 
