@@ -71,14 +71,14 @@ export class ExtractTask implements TaskInterface {
 				this._parsers.forEach((parser: ParserInterface) => {
 					if (this._options.defaultSeperator) {
 						for (const key of parser.extract(contents, path).keys()) {
-							if(key.indexOf(this._options.defaultSeperator) !== -1){
-                                collection = collection.add(
+							if(key.indexOf(this._options.defaultSeperator) !== -1) {
+								collection = collection.add(
 									key.substring(0, key.indexOf('|')), // Extracted key before seperator
 									key.substr(key.indexOf(this._options.defaultSeperator) + 1) // Extracted default value after seperator
 								);
 							} else {
-                                collection = collection.add(key);
-                            }
+								collection = collection.add(key);
+							}
 						}
 					} else {
 						collection = collection.union(parser.extract(contents, path));
@@ -148,8 +148,8 @@ export class ExtractTask implements TaskInterface {
 	protected _readDir(dir: string, patterns: string[]): string[] {
 		return patterns.reduce((results, pattern) => {
 			return glob.sync(dir + pattern)
-                .filter(path => fs.statSync(path).isFile())
-                .concat(results);
+				.filter(path => fs.statSync(path).isFile())
+				.concat(results);
 		}, []);
 	}
 
