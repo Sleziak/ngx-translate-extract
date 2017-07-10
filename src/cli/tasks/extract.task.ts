@@ -1,160 +1,199 @@
-import { TranslationCollection } from '../../utils/translation.collection';
-import { TaskInterface } from './task.interface';
-import { ParserInterface } from '../../parsers/parser.interface';
-import { CompilerInterface } from '../../compilers/compiler.interface';
-
 import * as chalk from 'chalk';
-import * as glob from 'glob';
 import * as fs from 'fs';
-import * as path from 'path';
+import * as glob from 'glob';
 import * as mkdirp from 'mkdirp';
+import * as path from 'path';
+import {CompilerInterface} from '../../compilers/compiler.interface';
+import {ParserInterface} from '../../parsers/parser.interface';
+import {TranslationCollection} from '../../utils/translation.collection';
+import {TaskInterface} from './task.interface';
 
 export interface ExtractTaskOptionsInterface {
-	replace?: boolean;
-	sort?: boolean;
-	clean?: boolean;
-	patterns?: string[];
-	defaultSeperator?: string;
+    replace?: boolean;
+    sort?: boolean;
+    clean?: boolean;
+    patterns?: string[];
+    defaultSeperator?: string;
 }
 
 export class ExtractTask implements TaskInterface {
 
-	protected _options: ExtractTaskOptionsInterface = {
-		replace: false,
-		sort: false,
-		clean: false,
-		patterns: [],
-		defaultSeperator: null
-	};
+    protected _options: ExtractTaskOptionsInterface = {
+        replace: false,
+        sort: false,
+        clean: false,
+        patterns: [],
+        defaultSeperator: null,
+    };
 
-	protected _parsers: ParserInterface[] = [];
-	protected _compiler: CompilerInterface;
+    protected _parsers: ParserInterface[] = [];
+    protected _compiler: CompilerInterface;
 
-	public constructor(protected _input: string[], protected _output: string[], options?: ExtractTaskOptionsInterface) {
-		this._options = Object.assign({}, this._options, options);
-	}
+    public constructor(protected _input: string[], protected _output: string[], options?: ExtractTaskOptionsInterface) {
+        this._options = Object.assign({}, this._options, options);
+    }
 
-	public execute(): void {
-		if (!this._parsers) {
-			throw new Error('No parsers configured');
-		}
-		if (!this._compiler) {
-			throw new Error('No compiler configured');
-		}
+    public execute(): void {
+        if (!this._parsers) {
+            throw new Error('No parsers configured');
+        }
+        if (!this._compiler) {
+            throw new Error('No compiler configured');
+        }
 
-		const collection = this._extract();
-		this._out(chalk.green('Extracted %d strings\n'), collection.count());
-		this._save(collection);
-	}
+        const collection = this._extract();
+        this._out(chalk.green('Extracted %d strings\n'), collection.count());
+        this._save(collection);
+    }
 
-	public setParsers(parsers: ParserInterface[]): this {
-		this._parsers = parsers;
-		return this;
-	}
+    public setParsers(parsers: ParserInterface[]): this {
+        this._parsers = parsers;
+        return this;
+    }
 
-	public setCompiler(compiler: CompilerInterface): this {
-		this._compiler = compiler;
-		return this;
-	}
+    public setCompiler(compiler: CompilerInterface): this {
+        this._compiler = compiler;
+        return this;
+    }
 
-	/**
-	 * Extract strings from input dirs using configured parsers
-	 */
-	protected _extract(): TranslationCollection {
-		this._out(chalk.bold('Extracting strings...'));
+    /**
+     * Extract strings from input dirs using configured parsers
+     */
+    protected _extract(): TranslationCollection {
+        this._out(chalk.bold('Extracting strings...'));
+        let collection: TranslationCollection = new TranslationCollection();
+        this._input.forEach(dir => {
+            this._readDir(dir, this._options.patterns).forEach(path => {
+                this._out(chalk.gray('- %s'), path);
+                const contents: string = fs.readFileSync(path, 'utf-8');
+                this._parsers.forEach((parser: ParserInterface) => {
+                    if (this._options.defaultSeperator) {
+                        for (const key of parser.extract(contents, path).keys()) {
+                            if (key.indexOf(this._options.defaultSeperator) !== -1) {
+                                collection = collection.add(
+                                    key.substring(0, key.indexOf('|')), // Extracted key before seperator
+                                    key.substr(key.indexOf(this._options.defaultSeperator) + 1).trim() // Extracted default value after seperator
+                                );
+                            } else {
+                                collection = collection.add(key);
+                            }
+                        }
+                    } else {
+                        collection = collection.union(parser.extract(contents, path));
+                    }
+                });
+            });
+        });
+        this.duplicateCheck(collection);
+        return collection;
+    }
 
-		let collection: TranslationCollection = new TranslationCollection();
-		this._input.forEach(dir => {
-			this._readDir(dir, this._options.patterns).forEach(path => {
-				this._out(chalk.gray('- %s'), path);
-				const contents: string = fs.readFileSync(path, 'utf-8');
-				this._parsers.forEach((parser: ParserInterface) => {
-					if (this._options.defaultSeperator) {
-						for (const key of parser.extract(contents, path).keys()) {
-							if(key.indexOf(this._options.defaultSeperator) !== -1) {
-								collection = collection.add(
-									key.substring(0, key.indexOf('|')), // Extracted key before seperator
-									key.substr(key.indexOf(this._options.defaultSeperator) + 1) // Extracted default value after seperator
-								);
-							} else {
-								collection = collection.add(key);
-							}
-						}
-					} else {
-						collection = collection.union(parser.extract(contents, path));
-					}
-				});
-			});
-		});
 
-		return collection;
-	}
+    protected duplicateCheck(collection: TranslationCollection) {
+        const values = {};
 
-	/**
-	 * Process collection according to options (merge, clean, sort), compile and save
-	 * @param collection
-	 */
-	protected _save(collection: TranslationCollection): void {
-		this._output.forEach(output => {
-			const normalizedOutput: string = path.resolve(output);
+        for (const translation of collection.keys()) {
+            const key = collection.get(translation).toLowerCase();
+            if (!values.hasOwnProperty(key)) {
+                values[key] = [];
+            }
+            values[key].push(translation);
+        }
 
-			let dir: string = normalizedOutput;
-			let filename: string = `strings.${this._compiler.extension}`;
-			if (!fs.existsSync(normalizedOutput) || !fs.statSync(normalizedOutput).isDirectory()) {
-				dir = path.dirname(normalizedOutput);
-				filename = path.basename(normalizedOutput);
-			}
+        for (const translation in values) {
+            if (values.hasOwnProperty(translation)) {
+                if (values[translation].length > 1) {
+                    console.warn('Duplicate: ' + translation);
+                    let missingKeys = 'Keys: ';
+                    for (const key of values[translation]) {
+                        missingKeys += '[' + key + ']';
+                    }
+                    console.warn(missingKeys + '\n');
 
-			const outputPath: string = path.join(dir, filename);
-			let processedCollection: TranslationCollection = collection;
 
-			this._out(chalk.bold('\nSaving: %s'), outputPath);
+                }
+            }
+        }
 
-			if (fs.existsSync(outputPath) && !this._options.replace) {
-				const existingCollection: TranslationCollection = this._compiler.parse(fs.readFileSync(outputPath, 'utf-8'));
-				if (!existingCollection.isEmpty()) {
-					processedCollection = processedCollection.union(existingCollection);
-					this._out(chalk.dim('- merged with %d existing strings'), existingCollection.count());
-				}
 
-				if (this._options.clean) {
-					const collectionCount = processedCollection.count();
-					processedCollection = processedCollection.intersect(collection);
-					const removeCount = collectionCount - processedCollection.count();
-					if (removeCount > 0) {
-						this._out(chalk.dim('- removed %d obsolete strings'), removeCount);
-					}
-				}
-			}
+        // duplicateValues.sort(function (left, right) {
+        //     if (collection.get(left) < collection.get(right)) {
+        //         return -1;
+        //     } else if (collection.get(left) > collection.get(right)) {
+        //         return 1;
+        //     }
+        //     return 0;
+        // });
+        // for (const duplicate of duplicateValues) {
+        //     console.log('Duplicate: ' + this.padString(collection.get(duplicate), maxLength) + ' [' + duplicate + ']');
+        // }
+    }
 
-			if (this._options.sort) {
-				processedCollection = processedCollection.sort();
-				this._out(chalk.dim('- sorted strings'));
-			}
+    /**
+     * Process collection according to options (merge, clean, sort), compile and save
+     * @param collection
+     */
+    protected _save(collection: TranslationCollection): void {
+        this._output.forEach(output => {
+            const normalizedOutput: string = path.resolve(output);
 
-			if (!fs.existsSync(dir)) {
-				mkdirp.sync(dir);
-				this._out(chalk.dim('- created dir: %s'), dir);
-			}
-			fs.writeFileSync(outputPath, this._compiler.compile(processedCollection));
+            let dir: string = normalizedOutput;
+            let filename: string = `strings.${this._compiler.extension}`;
+            if (!fs.existsSync(normalizedOutput) || !fs.statSync(normalizedOutput).isDirectory()) {
+                dir = path.dirname(normalizedOutput);
+                filename = path.basename(normalizedOutput);
+            }
 
-			this._out(chalk.green('Done!'));
-		});
-	}
+            const outputPath: string = path.join(dir, filename);
+            let processedCollection: TranslationCollection = collection;
 
-	/**
-	 * Get all files in dir matching patterns
-	 */
-	protected _readDir(dir: string, patterns: string[]): string[] {
-		return patterns.reduce((results, pattern) => {
-			return glob.sync(dir + pattern)
-				.filter(path => fs.statSync(path).isFile())
-				.concat(results);
-		}, []);
-	}
+            this._out(chalk.bold('\nSaving: %s'), outputPath);
 
-	protected _out(...args: any[]): void {
-		console.log.apply(this, arguments);
-	}
+            if (fs.existsSync(outputPath) && !this._options.replace) {
+                const existingCollection: TranslationCollection = this._compiler.parse(fs.readFileSync(outputPath, 'utf-8'));
+                if (!existingCollection.isEmpty()) {
+                    processedCollection = processedCollection.union(existingCollection);
+                    this._out(chalk.dim('- merged with %d existing strings'), existingCollection.count());
+                }
+
+                if (this._options.clean) {
+                    const collectionCount = processedCollection.count();
+                    processedCollection = processedCollection.intersect(collection);
+                    const removeCount = collectionCount - processedCollection.count();
+                    if (removeCount > 0) {
+                        this._out(chalk.dim('- removed %d obsolete strings'), removeCount);
+                    }
+                }
+            }
+
+            if (this._options.sort) {
+                processedCollection = processedCollection.sort();
+                this._out(chalk.dim('- sorted strings'));
+            }
+
+            if (!fs.existsSync(dir)) {
+                mkdirp.sync(dir);
+                this._out(chalk.dim('- created dir: %s'), dir);
+            }
+            fs.writeFileSync(outputPath, this._compiler.compile(processedCollection));
+
+            this._out(chalk.green('Done!'));
+        });
+    }
+
+    /**
+     * Get all files in dir matching patterns
+     */
+    protected _readDir(dir: string, patterns: string[]): string[] {
+        return patterns.reduce((results, pattern) => {
+            return glob.sync(dir + pattern)
+                .filter(path => fs.statSync(path).isFile())
+                .concat(results);
+        }, []);
+    }
+
+    protected _out(...args: any[]): void {
+        console.log.apply(this, arguments);
+    }
 
 }
